@@ -42,7 +42,7 @@
   <script>
     const API = 'https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?limit=100';
     const STANDINGS_API = 'https://site.api.espn.com/apis/site/v2/sports/basketball/nba/standings';
-    const REFRESH_MINUTES = 10;
+    const REFRESH_MINUTES = 100;
 
     let state = {
       notes: JSON.parse(localStorage.getItem('courtside-notes') || '[]'),
@@ -60,8 +60,8 @@
     if (!state.notes.length) {
       state.notes = [{
         id: crypto.randomUUID(),
-        title: 'Eastern Conference Scouting',
-        body: 'Point differential in the final 4 minutes of the 3rd quarter remains the highest indicator of game outcome for this squad.',
+        title: 'Test Next Week',
+        body: 'Whatever notes you need.',
         tags: ['scouting', 'east'],
         pinned: true,
         createdAt: Date.now(),
