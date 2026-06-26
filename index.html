@@ -1,10 +1,410 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="en">
 <head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Notes & Scores</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Bebas+Neue&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --ink: #0d0b08;
+      --panel: #1a1410;
+      --amber: #d97706;
+      --cyan: #22d3ee;
+    }
+    body { font-family: 'Barlow', sans-serif; background: var(--ink); color: white; }
+    .font-display { font-family: 'Bebas Neue', sans-serif; }
+    .scroll-hide::-webkit-scrollbar { display: none; }
+    .scroll-hide { -ms-overflow-style: none; scrollbar-width: none; }
+    .line-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  </style>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            ink: '#0d0b08',
+            panel: '#1a1410',
+            amber: '#d97706',
+            cyan: '#22d3ee',
+          }
+        }
+      }
+    }
+  </script>
 </head>
-<body>
-  <h1>Notes & Scores</h1>
-  <p>In this website: You can study, develop, or look at nba scores.</p>
+<body class="min-h-screen overflow-hidden">
+  <div id="app" class="min-h-screen w-full flex flex-col md:flex-row"></div>
+
+  <script>
+    const API = 'https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?limit=100';
+    const STANDINGS_API = 'https://site.api.espn.com/apis/site/v2/sports/basketball/nba/standings';
+    const REFRESH_MINUTES = 10;
+
+    let state = {
+      notes: JSON.parse(localStorage.getItem('courtside-notes') || '[]'),
+      activeNoteId: localStorage.getItem('courtside-active-note') || null,
+      favorite: localStorage.getItem('courtside-favorite') || '',
+      tab: localStorage.getItem('courtside-tab') || 'today',
+      scores: [],
+      standings: [],
+      loading: false,
+      lastUpdated: null,
+      expanded: {},
+      search: '',
+    };
+
+    if (!state.notes.length) {
+      state.notes = [{
+        id: crypto.randomUUID(),
+        title: 'Eastern Conference Scouting',
+        body: 'Point differential in the final 4 minutes of the 3rd quarter remains the highest indicator of game outcome for this squad.',
+        tags: ['scouting', 'east'],
+        pinned: true,
+        createdAt: Date.now(),
+      }];
+    }
+    if (!state.activeNoteId) state.activeNoteId = state.notes[0].id;
+
+    function save() {
+      localStorage.setItem('courtside-notes', JSON.stringify(state.notes));
+      localStorage.setItem('courtside-active-note', state.activeNoteId || '');
+      localStorage.setItem('courtside-favorite', state.favorite);
+      localStorage.setItem('courtside-tab', state.tab);
+    }
+
+    function activeNote() {
+      return state.notes.find(n => n.id === state.activeNoteId) || state.notes[0];
+    }
+
+    async function fetchScores() {
+      state.loading = true;
+      render();
+      try {
+        const res = await fetch(API);
+        const data = await res.json();
+        state.scores = data.events || [];
+        state.lastUpdated = new Date();
+      } catch (e) {
+        console.error(e);
+      }
+      state.loading = false;
+      render();
+    }
+
+    async function fetchStandings() {
+      try {
+        const res = await fetch(STANDINGS_API);
+        const data = await res.json();
+        state.standings = data.children || [];
+      } catch (e) {
+        console.error(e);
+      }
+      render();
+    }
+
+    function formatClock(game) {
+      const s = game.status;
+      if (s.type === 'STATUS_FINAL') return 'Final';
+      if (s.type === 'STATUS_SCHEDULED') return new Date(game.date).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+      return `${s.displayClock || ''} ${s.period ? 'Q' + s.period : ''}`.trim();
+    }
+
+    function teamClasses(team) {
+      const isWinner = state.scores.some(g => {
+        const c = g.competitions[0];
+        const teams = c.competitors;
+        const us = teams.find(t => t.team.id === team.id);
+        const them = teams.find(t => t.team.id !== team.id);
+        return us && them && parseInt(us.score) > parseInt(them.score);
+      });
+      return isWinner ? 'text-cyan' : 'text-white';
+    }
+
+    function gameCard(game) {
+      const c = game.competitions[0];
+      const home = c.competitors.find(t => t.homeAway === 'home');
+      const away = c.competitors.find(t => t.homeAway === 'away');
+      const clock = formatClock(game);
+      const isLive = game.status.type === 'STATUS_IN_PROGRESS';
+      const isFinal = game.status.type === 'STATUS_FINAL';
+      const isFav = state.favorite && (home.team.id === state.favorite || away.team.id === state.favorite);
+      const expanded = state.expanded[game.id];
+
+      return `
+        <div class="bg-ink border ${isFav ? 'border-amber' : isLive ? 'border-cyan/40' : 'border-panel'} p-4 transition-colors ${isFav ? 'ring-1 ring-amber/30' : ''}">
+          <div class="flex justify-between items-center mb-3">
+            <span class="text-[10px] font-black uppercase tracking-widest ${isLive ? 'bg-cyan text-ink px-2 py-0.5' : isFinal ? 'text-gray-500' : 'text-amber'}">${isLive ? 'Live' : isFinal ? 'Final' : 'Scheduled'}</span>
+            <span class="text-xs font-bold ${isLive ? 'text-cyan' : 'text-gray-400'}">${clock}</span>
+          </div>
+          <div class="space-y-2">
+            <div class="flex justify-between items-center">
+              <div class="flex items-center gap-3">
+                <img src="${away.team.logo}" class="w-6 h-6 object-contain" alt="${away.team.displayName} logo">
+                <span class="font-display text-2xl ${teamClasses(away.team)}">${away.team.abbreviation}</span>
+                ${away.team.id === state.favorite ? '<span class="text-amber text-xs">★</span>' : ''}
+              </div>
+              <span class="font-display text-3xl ${teamClasses(away.team)}">${away.score || '--'}</span>
+            </div>
+            <div class="flex justify-between items-center">
+              <div class="flex items-center gap-3">
+                <img src="${home.team.logo}" class="w-6 h-6 object-contain" alt="${home.team.displayName} logo">
+                <span class="font-display text-2xl ${teamClasses(home.team)}">${home.team.abbreviation}</span>
+                ${home.team.id === state.favorite ? '<span class="text-amber text-xs">★</span>' : ''}
+              </div>
+              <span class="font-display text-3xl ${teamClasses(home.team)}">${home.score || '--'}</span>
+            </div>
+          </div>
+          <button data-expand="${game.id}" class="mt-3 w-full text-[10px] uppercase tracking-widest text-gray-500 hover:text-amber transition-colors">
+            ${expanded ? 'Hide Details' : 'Quarter Breakdown'}
+          </button>
+          ${expanded ? quarterLines(home, away) : ''}
+        </div>
+      `;
+    }
+
+    function quarterLines(home, away) {
+      const h = home.linescores || [];
+      const a = away.linescores || [];
+      const periods = Math.max(h.length, a.length);
+      let rows = '';
+      for (let i = 0; i < periods; i++) {
+        rows += `
+          <div class="flex justify-between text-xs py-1 border-b border-panel/50">
+            <span class="text-gray-500">Q${i+1}</span>
+            <div class="flex gap-6">
+              <span class="font-bold text-white">${a[i]?.displayValue || '-'}</span>
+              <span class="font-bold text-cyan">${h[i]?.displayValue || '-'}</span>
+            </div>
+          </div>
+        `;
+      }
+      return `<div class="mt-3 pt-3 border-t border-panel/50">${rows}</div>`;
+    }
+
+    function standingsTable() {
+      if (!state.standings.length) return '<div class="p-8 text-center text-gray-500">Loading standings…</div>';
+      return state.standings.map(conference => `
+        <div class="mb-6">
+          <h3 class="font-display text-2xl text-amber mb-3 px-2">${conference.name}</h3>
+          <div class="bg-ink border border-panel">
+            ${conference.standings.entries.map((entry, i) => {
+              const t = entry.team;
+              const stats = Object.fromEntries(entry.stats.map(s => [s.name, s.displayValue]));
+              return `
+                <div class="flex items-center justify-between px-3 py-2 ${i % 2 === 0 ? 'bg-panel/30' : ''} ${t.id === state.favorite ? 'border-l-2 border-amber' : ''}">
+                  <div class="flex items-center gap-3 w-1/3">
+                    <span class="text-xs text-gray-500 w-4">${entry.stats.find(s => s.name === 'rank')?.displayValue || i+1}</span>
+                    <img src="${t.logo}" class="w-5 h-5 object-contain" alt="${t.displayName}">
+                    <span class="text-sm font-bold truncate">${t.abbreviation}</span>
+                  </div>
+                  <div class="flex justify-end gap-4 text-xs text-gray-400 w-2/3">
+                    <span class="w-10 text-right">${stats.wins || '0'}-${stats.losses || '0'}</span>
+                    <span class="w-10 text-right">${stats.winPercent || '-'}</span>
+                    <span class="w-10 text-right">${stats.gamesBehind || '-'}</span>
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function notesList() {
+      const q = state.search.toLowerCase();
+      const filtered = state.notes
+        .filter(n => n.title.toLowerCase().includes(q) || n.body.toLowerCase().includes(q) || n.tags.some(t => t.toLowerCase().includes(q)))
+        .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || b.updatedAt - a.updatedAt);
+
+      return filtered.map(n => `
+        <div data-note-id="${n.id}" class="p-4 border-b border-panel cursor-pointer transition-colors ${state.activeNoteId === n.id ? 'bg-panel/60 border-l-4 border-l-amber' : 'hover:bg-panel/40 border-l-4 border-l-transparent'}"
+             onclick="selectNote('${n.id}')">
+          <div class="flex justify-between items-start mb-1">
+            <h3 class="font-display text-xl ${n.pinned ? 'text-cyan' : 'text-white'} leading-none">${n.title || 'Untitled Note'}</h3>
+            ${n.pinned ? '<span class="text-amber text-xs">★</span>' : ''}
+          </div>
+          <p class="text-sm text-gray-500 line-clamp-2 mb-2">${n.body}</p>
+          <div class="flex gap-2 text-[10px] uppercase tracking-wider text-gray-600">
+            ${n.tags.map(t => `<span class="bg-panel px-2 py-0.5">${t}</span>`).join('')}
+            <span class="ml-auto">${new Date(n.updatedAt || n.createdAt).toLocaleDateString()}</span>
+          </div>
+        </div>
+      `).join('') || '<div class="p-6 text-gray-500 text-center">No notes found.</div>';
+    }
+
+    function editor() {
+      const n = activeNote();
+      if (!n) return '';
+      const words = n.body.trim().split(/\s+/).filter(Boolean).length;
+      const chars = n.body.length;
+      return `
+        <header class="p-6 md:p-8 border-b border-panel flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div class="flex-1">
+            <span class="text-amber text-xs font-bold tracking-widest uppercase mb-1 block">Project: Season Analysis</span>
+            <input id="note-title" value="${n.title.replace(/"/g, '&quot;')}" class="font-display text-3xl md:text-5xl leading-none tracking-tight text-white uppercase bg-transparent border-none focus:ring-0 w-full outline-none placeholder-gray-700" placeholder="Note Title">
+          </div>
+          <div class="flex items-center gap-3">
+            <span class="text-xs text-gray-500 font-mono" id="autosave">Autosaved</span>
+            <button onclick="togglePin()" class="px-3 py-2 bg-panel border border-amber/30 text-amber text-xs font-bold uppercase tracking-wider hover:bg-amber hover:text-ink transition-colors">${n.pinned ? 'Unpin' : 'Pin'}</button>
+            <button onclick="newNote()" class="px-3 py-2 bg-amber text-ink text-xs font-bold uppercase tracking-wider hover:bg-amber/90 transition-colors">New Note</button>
+            <button onclick="deleteNote()" class="px-3 py-2 bg-red-900/40 border border-red-800 text-red-400 text-xs font-bold uppercase tracking-wider hover:bg-red-900 transition-colors">Delete</button>
+          </div>
+        </header>
+
+        <section class="p-6 md:p-8 flex-1 flex flex-col relative">
+          <div class="flex items-center gap-4 mb-4 text-cyan font-bold tracking-tighter text-lg">
+            <span class="block w-8 h-[2px] bg-cyan"></span>
+            <span id="tag-line">${n.tags[0] ? n.tags[0].toUpperCase() : 'SCOUTING REPORT'}</span>
+          </div>
+
+          <textarea id="note-body" class="flex-1 w-full bg-transparent border-none focus:ring-0 text-lg text-gray-200 placeholder-gray-700 resize-none outline-none min-h-[200px]" placeholder="Type your scouting notes here…">${n.body.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</textarea>
+
+          <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mt-6 pt-6 border-t border-panel">
+            <div class="flex gap-2 flex-wrap">
+              <input id="tag-input" placeholder="Add tag + Enter" class="bg-panel border border-panel px-3 py-1 text-sm text-white placeholder-gray-600 outline-none focus:border-amber" onkeydown="if(event.key==='Enter'){addTag();event.preventDefault();}">
+              ${n.tags.map(t => `<span class="inline-flex items-center gap-1 bg-panel border border-amber/30 text-amber text-xs px-2 py-1">${t} <button onclick="removeTag('${t}')" class="hover:text-white">×</button></span>`).join('')}
+            </div>
+            <div class="text-xs text-gray-500 font-mono">${words} words · ${chars} chars</div>
+          </div>
+
+          <div class="absolute bottom-6 right-6 font-display text-[80px] md:text-[120px] opacity-5 pointer-events-none leading-none select-none">
+            NBA.2024
+          </div>
+        </section>
+      `;
+    }
+
+    function sidebar() {
+      const tab = state.tab;
+      const last = state.lastUpdated ? state.lastUpdated.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '--';
+      return `
+        <aside class="w-full md:w-[420px] bg-panel flex flex-col border-t md:border-t-0 md:border-l border-amber/20">
+          <div class="p-4 md:p-6 border-b border-amber/20 flex justify-between items-end gap-4">
+            <h2 class="font-display text-3xl text-amber leading-none">COURTSIDE</h2>
+            <span class="text-[10px] text-cyan font-bold tracking-[0.2em]">LIVE UPDATES</span>
+          </div>
+
+          <div class="flex border-b border-panel">
+            <button onclick="setTab('today')" class="flex-1 py-3 text-xs font-bold uppercase tracking-wider transition-colors ${tab === 'today' ? 'text-ink bg-amber' : 'text-gray-500 hover:text-white'}">Today</button>
+            <button onclick="setTab('standings')" class="flex-1 py-3 text-xs font-bold uppercase tracking-wider transition-colors ${tab === 'standings' ? 'text-ink bg-amber' : 'text-gray-500 hover:text-white'}">Standings</button>
+          </div>
+
+          <div class="flex-1 overflow-y-auto scroll-hide p-4 space-y-4">
+            ${tab === 'today' ? `
+              <div class="flex justify-between items-center text-xs text-gray-500">
+                <span>Updated ${last}</span>
+                <div class="flex items-center gap-2">
+                  <span class="text-[10px] uppercase">Next refresh in ${REFRESH_MINUTES}m</span>
+                  <button onclick="refreshScores()" class="text-amber hover:text-white font-bold transition-colors">↻ Reload</button>
+                </div>
+              </div>
+              ${state.loading ? '<div class="p-8 text-center text-cyan font-bold animate-pulse">LOADING SCORES…</div>' : ''}
+              ${state.scores.map(gameCard).join('') || '<div class="p-8 text-center text-gray-500">No games scheduled today.</div>'}
+            ` : standingsTable()}
+          </div>
+        </aside>
+      `;
+    }
+
+    function render() {
+      const app = document.getElementById('app');
+      app.innerHTML = `
+        <main class="flex-1 flex flex-col min-h-screen md:min-h-0 bg-ink overflow-hidden">
+          <header class="p-4 md:p-6 border-b border-panel flex items-center justify-between gap-4">
+            <h1 class="font-display text-2xl md:text-3xl text-white tracking-tight">COURTSIDE NOTES</h1>
+            <div class="flex items-center gap-2">
+              <input id="search" value="${state.search.replace(/"/g, '&quot;')}" placeholder="Search notes…" class="hidden sm:block bg-panel border border-panel px-3 py-1.5 text-sm text-white placeholder-gray-600 outline-none focus:border-amber w-48" oninput="setSearch(this.value)">
+            </div>
+          </header>
+
+          <div class="flex-1 flex overflow-hidden">
+            <div class="w-64 md:w-72 border-r border-panel overflow-y-auto scroll-hide hidden md:block">
+              <div class="p-3 border-b border-panel">
+                <button onclick="newNote()" class="w-full py-2 bg-amber text-ink text-xs font-bold uppercase tracking-wider hover:bg-amber/90 transition-colors">+ New Note</button>
+              </div>
+              ${notesList()}
+            </div>
+
+            <div class="flex-1 flex flex-col min-w-0">
+              ${editor()}
+            </div>
+          </div>
+
+          <div class="md:hidden border-t border-panel p-3 bg-panel">
+            <button onclick="newNote()" class="w-full py-2 bg-amber text-ink text-xs font-bold uppercase tracking-wider">+ New Note</button>
+          </div>
+        </main>
+        ${sidebar()}
+      `;
+      bindEditor();
+    }
+
+    function bindEditor() {
+      const title = document.getElementById('note-title');
+      const body = document.getElementById('note-body');
+      const saveText = document.getElementById('autosave');
+      if (!title || !body) return;
+      const update = () => {
+        const n = activeNote();
+        n.title = title.value;
+        n.body = body.value;
+        n.updatedAt = Date.now();
+        save();
+        if (saveText) saveText.innerText = 'Autosaved just now';
+        render();
+      };
+      title.oninput = update;
+      body.oninput = update;
+    }
+
+    function selectNote(id) { state.activeNoteId = id; save(); render(); }
+    function newNote() {
+      const n = { id: crypto.randomUUID(), title: '', body: '', tags: [], pinned: false, createdAt: Date.now(), updatedAt: Date.now() };
+      state.notes.unshift(n); state.activeNoteId = n.id; save(); render();
+    }
+    function deleteNote() {
+      if (!confirm('Delete this note?')) return;
+      state.notes = state.notes.filter(n => n.id !== state.activeNoteId);
+      state.activeNoteId = state.notes[0]?.id || null; save(); render();
+    }
+    function togglePin() { const n = activeNote(); n.pinned = !n.pinned; n.updatedAt = Date.now(); save(); render(); }
+    function addTag() {
+      const input = document.getElementById('tag-input');
+      const tag = input.value.trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
+      if (!tag) return;
+      const n = activeNote();
+      if (!n.tags.includes(tag)) n.tags.push(tag);
+      n.updatedAt = Date.now(); save(); render();
+    }
+    function removeTag(tag) { const n = activeNote(); n.tags = n.tags.filter(t => t !== tag); n.updatedAt = Date.now(); save(); render(); }
+    function setSearch(v) { state.search = v; render(); }
+    function setTab(t) { state.tab = t; if (t === 'standings' && !state.standings.length) fetchStandings(); save(); render(); }
+    function refreshScores() { fetchScores(); }
+
+    document.addEventListener('click', e => {
+      const btn = e.target.closest('[data-expand]');
+      if (!btn) return;
+      const id = btn.dataset.expand;
+      state.expanded[id] = !state.expanded[id];
+      render();
+    });
+
+    fetchScores();
+    setInterval(fetchScores, REFRESH_MINUTES * 60 * 1000);
+
+    window.newNote = newNote;
+    window.selectNote = selectNote;
+    window.deleteNote = deleteNote;
+    window.togglePin = togglePin;
+    window.addTag = addTag;
+    window.removeTag = removeTag;
+    window.setSearch = setSearch;
+    window.setTab = setTab;
+    window.refreshScores = refreshScores;
+  </script>
 </body>
 </html>
