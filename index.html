@@ -349,17 +349,21 @@
       const saveText = document.getElementById('autosave');
       if (!title || !body) return;
       const update = () => {
-        const n = activeNote();
-        n.title = title.value;
-        n.body = body.value;
-        n.updatedAt = Date.now();
-        save();
-        if (saveText) saveText.innerText = 'Autosaved just now';
-        render();
-      };
-      title.oninput = update;
-      body.oninput = update;
-    }
+    const n = activeNote();
+    n.title = title.value;
+    n.body = body.value;
+    n.updatedAt = Date.now();
+    save();
+    if (saveText) saveText.innerText = 'Autosaved just now';
+    // Just refresh the note list in the sidebar (title/preview may have
+    // changed), WITHOUT re-rendering the editor — re-rendering the editor
+    // would destroy and recreate the textarea/input you're typing in,
+    // which is what was kicking you out after one character.
+    const listEl = document.querySelector('.w-64.md\\:w-72 > div:last-child');
+    if (listEl) listEl.innerHTML = notesList();
+};
+title.oninput = update;
+body.oninput = update;
 
     function selectNote(id) { state.activeNoteId = id; save(); render(); }
     function newNote() {
